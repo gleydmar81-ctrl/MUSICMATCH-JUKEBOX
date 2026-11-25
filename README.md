@@ -6,15 +6,15 @@ Uma recriação fiel, versátil e moderna do clássico **MusicMatch Jukebox** do
 
 ## ✨ Principais Funcionalidades
 
-- **Biblioteca Persistente (Lembra a sua Pasta de Músicas):**
-  - O aplicativo grava a pasta das suas músicas no `config.json` e recarrega tudo automaticamente toda vez que você abrir no PC ou no Tablet.
-  - Varredura rápida com leitor de ID3 nativo em todas as subpastas (recursivo, sem limite artificial de faixas), incluindo caminhos longos do Windows, exibindo as músicas agrupadas por pasta.
-  - Pastas recolhíveis com estado lembrado neste navegador.
+- **Biblioteca com busca automática:**
+  - Ao abrir, o servidor procura músicas nas pastas do usuário e nos discos locais/removíveis conectados ao computador onde ele está rodando.
+  - A busca percorre subpastas, lê tags ID3 e adiciona as faixas encontradas à lista. Use **"🔍 Buscar músicas"** para atualizar a biblioteca.
+  - Discos e pastas de rede não são varridos. Pastas sem permissão e diretórios de sistema são ignorados.
+  - Músicas agrupadas por pasta, com recolhimento individual ou geral sem remover faixas da playlist.
   - Montagem, reordenação e salvamento de playlists personalizadas em `config.json`, compartilhadas entre PC e Tablet.
-  - Suporte a pastas locais e **pastas de rede Windows (SMB/CIFS)**.
 
 - **Edição Direta no Disco (Zero Duplicatas):**
-  - O botão **"💾 Salvar no Arquivo"** sobrescreve o arquivo original no mesmo lugar onde ele está no computador ou na rede.
+  - O botão **"💾 Salvar no Arquivo"** sobrescreve o arquivo original no mesmo lugar onde ele está no computador.
   - Gravação dupla de tags: **ID3v2.3 (UTF-16 com BOM)** e **ID3v1.1 (128 bytes)**.
   - Suporte completo a Capas de Álbum (*Cover Art*).
 
@@ -33,41 +33,26 @@ Uma recriação fiel, versátil e moderna do clássico **MusicMatch Jukebox** do
 
 ---
 
-## 📱 Como Acessar no Tablet
+## 📱 Como Acessar no Tablet pelo navegador
 
 1. Certifique-se de que o tablet e o PC estejam na mesma rede Wi-Fi.
 2. No navegador do Tablet, acesse:
    👉 **`http://IP_DO_PC:8081`** (substitua pelo IPv4 atual do PC)
-3. Todas as músicas da biblioteca aparecerão automaticamente! Você pode tocar, gerenciar playlists e editar tags direto da tela de toque do tablet.
+3. As músicas dos discos locais do PC onde o servidor está rodando aparecerão automaticamente. Você pode tocar, gerenciar playlists e editar tags direto da tela de toque do tablet.
+   - Por segurança, navegadores não permitem varrer automaticamente o armazenamento do próprio tablet. Para tocar arquivos do tablet, use **"➕ Arquivos"** ou **"📁 Pasta Local"**.
 
 ## 📲 Aplicativo Android (APK)
 
-O APK abre o Jukebox em uma janela própria, sem a interface do navegador. Ele se conecta ao servidor Python que continua rodando no PC; as músicas não são copiadas para o tablet.
-Como a interface é carregada do servidor, mudanças visuais aparecem ao recarregar o app, sem reinstalar o APK.
+O APK é independente: inclui a interface do player, busca músicas no armazenamento do próprio tablet e reproduz os arquivos localmente. Não precisa do servidor Python, Wi-Fi ou computador.
 
-1. Inicie o servidor no PC com `iniciar.bat`.
-2. No Windows, execute `ipconfig` e anote o endereço IPv4 do PC conectado à mesma rede Wi-Fi do tablet.
-3. Instale `android-app/app/build/outputs/apk/debug/app-debug.apk` no tablet.
-4. Na primeira abertura, informe `http://IP_DO_PC:8081` (por exemplo, `http://192.168.1.50:8081`). O endereço fica salvo no aplicativo e pode ser alterado pelo botão **Servidor**.
-5. Se o Android não conectar, permita o acesso do Python na rede privada do Firewall do Windows.
+1. Instale `android-app/app/build/outputs/apk/debug/app-debug.apk` no tablet.
+2. Autorize o acesso a arquivos de áudio quando solicitado.
+3. Abra **Buscar músicas** para atualizar a biblioteca local.
+4. Ao selecionar o modo **VU**, autorize o acesso ao áudio para sincronizar os medidores com a reprodução. Essa captura usa o sinal do player, não o microfone; se a permissão for negada, o player continua funcionando com a animação visual.
 
-Para gerar o APK de depuração, abra a pasta `android-app` no Android Studio com JDK 17 e SDK Android 35, ou execute `gradlew.bat assembleDebug` nessa pasta.
+Para gerar o APK de depuração, instale Node.js/npm e execute `npm ci` na pasta do projeto. Depois, abra `android-app` no Android Studio com JDK 17 e SDK Android 35, ou execute `gradlew.bat assembleDebug` nessa pasta. Os scripts do player são transpilados para compatibilidade com WebViews antigos do Android.
 
 ---
-
-## 🖥️ Conectando Músicas de um PC com Windows na Rede
-
-Para que o Jukebox acesse as músicas que estão em um computador Windows:
-
-1. No Windows, compartilhe a pasta de músicas (botão direito na pasta -> *Propriedades* -> *Compartilhamento*).
-2. No Linux, monte a pasta da rede:
-   ```bash
-   sudo mkdir -p /mnt/windows_musicas
-   sudo mount -t cifs //IP_DO_WINDOWS/Musicas /mnt/windows_musicas -o username=SEU_USUARIO,uid=$(id -u),gid=$(id -g)
-   ```
-3. No Jukebox (no PC ou no Tablet), clique no botão **"⚙️ Alterar Pasta"** na barra da biblioteca e digite:
-   `/mnt/windows_musicas`
-4. Clique em **"💾 Salvar e Carregar Biblioteca"**. Pronto! O Jukebox gravará esse caminho e carregará sempre que abrir.
 
 ---
 
@@ -77,10 +62,8 @@ Se você quiser levar o projeto para rodar no Windows:
 
 1. Instale o Python ([python.org](https://www.python.org/)) marcando a opção **"Add Python to PATH"**.
 2. Copie a pasta `musicmatch-jukebox` para o seu computador Windows.
-3. Configure a pasta de músicas:
-   - Abra o aplicativo e use **"⚙️ Alterar Pasta"** para escolher a pasta existente no computador onde o servidor está rodando.
-   - Se preferir editar `config.json` diretamente, escape as barras invertidas (`C:\\Users\\SeuNome\\Music`) ou use barras normais (`C:/Users/SeuNome/Music`).
-   - O `config.json` é criado automaticamente e não é versionado no Git, pois contém o caminho local da biblioteca e suas playlists.
+3. Ao iniciar o servidor, a biblioteca será preenchida automaticamente com músicas encontradas nos discos locais e removíveis.
+   - O `config.json` é criado automaticamente e não é versionado no Git, pois contém suas playlists.
 4. Arquivos de inicialização inclusos:
    - **`iniciar.bat`**: Inicia o servidor em segundo plano (silencioso, sem janela preta) e abre a página no navegador com 2 cliques.
    - **`parar.bat`**: Encerra o servidor na porta 8081.
