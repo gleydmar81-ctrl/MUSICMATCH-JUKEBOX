@@ -1,0 +1,20 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.musicmatch.jukebox"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.musicmatch.jukebox"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+}

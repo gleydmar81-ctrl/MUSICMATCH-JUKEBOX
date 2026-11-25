@@ -1,0 +1,15 @@
+# Local library paths and playlists
+/config.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Android Studio and Gradle output
+/android-app/.gradle/
+/android-app/app/build/
+/android-app/build/
+/android-app/local.properties
+/android-app/.idea/
