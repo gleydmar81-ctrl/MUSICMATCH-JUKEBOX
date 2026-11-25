@@ -26,6 +26,9 @@ class AudioEngine {
     this.isInitialized = false;
     this.isPlaying = false;
     this.currentTrack = null;
+    this.androidPlayback = !!window.AndroidBridge;
+    this.visualizerPhase = 0;
+    this.nativeVULevel = null;
 
     // Callbacks
     this.onTimeUpdate = null;
@@ -34,10 +37,45 @@ class AudioEngine {
     this.onStateChange = null;
 
     this._setupAudioEvents();
+    if (this.androidPlayback) this._setupAndroidPlaybackBridge();
+  }
+
+  _setupAndroidPlaybackBridge() {
+    window.MusicMatchNativeAudio = (state, message) => {
+      if (state === "playing") {
+        this.isPlaying = true;
+        this.nativeVULevel = 0;
+        if (this.onStateChange) this.onStateChange(true);
+      } else if (state === "paused" || state === "stopped" || state === "ended") {
+        this.isPlaying = false;
+        if (this.onStateChange) this.onStateChange(false);
+        if (state === "ended" && this.onEnded) this.onEnded();
+      } else if (state === "error") {
+        this.isPlaying = false;
+        if (this.onStateChange) this.onStateChange(false);
+        const error = new Error(message || "Não foi possível reproduzir a faixa.");
+        console.error(error.message);
+        if (this.onError) this.onError(error);
+      }
+    };
+
+    window.MusicMatchNativeProgress = (currentTime, duration) => {
+      if (this.onTimeUpdate) this.onTimeUpdate(currentTime, duration);
+    };
+
+    window.MusicMatchNativeVU = (level) => {
+      if (typeof level === "number" && isFinite(level)) {
+        this.nativeVULevel = Math.max(0, Math.min(1, level));
+      }
+    };
   }
 
   _initContext() {
     if (this.isInitialized) return;
+    if (window.AndroidBridge) {
+      this.isInitialized = true;
+      return;
+    }
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AudioContext();
@@ -121,25 +159,38 @@ class AudioEngine {
       if (this.onStateChange) this.onStateChange(true);
     });
 
+    this.audio.addEventListener("playing", () => {
+      console.info("Áudio local começou a tocar.");
+    });
+
     this.audio.addEventListener("pause", () => {
       this.isPlaying = false;
       if (this.onStateChange) this.onStateChange(false);
     });
 
     this.audio.addEventListener("error", (e) => {
-      console.error("Audio playback error:", e);
+      const error = this.audio.error;
+      console.error("Erro de áudio: " + (error
+        ? error.code + " " + error.message
+        : "desconhecido"));
       if (this.onError) this.onError(e);
     });
   }
 
   async loadAndPlay(track) {
+    if (this.androidPlayback && track.contentUri) {
+      this.currentTrack = track;
+      window.AndroidBridge.playTrack(track.contentUri, this.audio.volume);
+      return;
+    }
+
     this._initContext();
     if (this.ctx && this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
 
     this.currentTrack = track;
-    this.audio.src = track.url;
+    this._setTrackSource(track);
     try {
       await this.audio.play();
       this.isPlaying = true;
@@ -148,7 +199,27 @@ class AudioEngine {
     }
   }
 
+  loadTrack(track) {
+    this.currentTrack = track;
+    if (this.androidPlayback && track.contentUri) return;
+    this._setTrackSource(track);
+  }
+
+  _setTrackSource(track) {
+    if (track.contentUri && track.url === track.contentUri) {
+      this.audio.removeAttribute("crossorigin");
+    } else {
+      this.audio.crossOrigin = "anonymous";
+    }
+    this.audio.src = track.url;
+  }
+
   play() {
+    if (this.androidPlayback && this.currentTrack && this.currentTrack.contentUri) {
+      window.AndroidBridge.playTrack(this.currentTrack.contentUri, this.audio.volume);
+      return;
+    }
+
     this._initContext();
     if (this.ctx && this.ctx.state === "suspended") {
       this.ctx.resume();
@@ -159,10 +230,21 @@ class AudioEngine {
   }
 
   pause() {
+    if (this.androidPlayback && this.currentTrack && this.currentTrack.contentUri) {
+      window.AndroidBridge.pauseTrack();
+      return;
+    }
     this.audio.pause();
   }
 
   stop() {
+    if (this.androidPlayback && this.currentTrack && this.currentTrack.contentUri) {
+      window.AndroidBridge.stopTrack();
+      this.isPlaying = false;
+      if (this.onStateChange) this.onStateChange(false);
+      return;
+    }
+
     this.audio.pause();
     this.audio.currentTime = 0;
     this.isPlaying = false;
@@ -171,6 +253,10 @@ class AudioEngine {
 
   seek(seconds) {
     if (!isNaN(seconds) && isFinite(seconds)) {
+      if (this.androidPlayback && this.currentTrack && this.currentTrack.contentUri) {
+        window.AndroidBridge.seekTrack(seconds);
+        return;
+      }
       this.audio.currentTime = Math.max(0, Math.min(seconds, this.audio.duration || 0));
     }
   }
@@ -179,6 +265,7 @@ class AudioEngine {
     // val: 0.0 to 1.0
     const clamped = Math.max(0, Math.min(val, 1));
     this.audio.volume = clamped;
+    if (this.androidPlayback) window.AndroidBridge.setTrackVolume(clamped);
     if (this.gainNode) {
       this.gainNode.gain.value = clamped;
     }
@@ -216,12 +303,61 @@ class AudioEngine {
   getFrequencyData(array) {
     if (this.analyser) {
       this.analyser.getByteFrequencyData(array);
+      return;
     }
+
+    if (!this.androidPlayback || !this.isPlaying) {
+      for (let i = 0; i < array.length; i++) array[i] = 0;
+      return;
+    }
+
+    // Native playback does not expose PCM to Web Audio, so animate the display without recording audio.
+    this.visualizerPhase += 0.12;
+    for (let i = 0; i < array.length; i++) {
+      const band = i / array.length;
+      const pulse = (Math.sin(this.visualizerPhase * (0.6 + band * 1.8) + i * 0.21) + 1) / 2;
+      const flutter = (Math.sin(this.visualizerPhase * 2.7 + i * 0.73) + 1) / 2;
+      const target = 12 + pulse * (125 * (1 - band * 0.38)) + flutter * 45;
+      array[i] = Math.round(array[i] * 0.72 + target * 0.28);
+    }
+  }
+
+  getVULevels(array) {
+    if (this.nativeVULevel !== null) {
+      const level = this.isPlaying ? this.nativeVULevel : 0;
+      return { left: level, right: level };
+    }
+
+    this.getFrequencyData(array);
+    const half = Math.floor(array.length / 2);
+    let sumLeft = 0;
+    let sumRight = 0;
+    for (let i = 0; i < half; i++) {
+      sumLeft += array[i];
+      sumRight += array[i + half];
+    }
+    return {
+      left: sumLeft / (half * 255),
+      right: sumRight / (half * 255)
+    };
   }
 
   getTimeDomainData(array) {
     if (this.analyser) {
       this.analyser.getByteTimeDomainData(array);
+      return;
+    }
+
+    if (!this.androidPlayback || !this.isPlaying) {
+      for (let i = 0; i < array.length; i++) array[i] = 128;
+      return;
+    }
+
+    this.visualizerPhase += 0.12;
+    for (let i = 0; i < array.length; i++) {
+      const wave = Math.sin(i * 0.18 + this.visualizerPhase) * 40;
+      const detail = Math.sin(i * 0.047 - this.visualizerPhase * 0.8) * 18;
+      array[i] = Math.max(0, Math.min(255, Math.round(128 + wave + detail)));
     }
   }
 }

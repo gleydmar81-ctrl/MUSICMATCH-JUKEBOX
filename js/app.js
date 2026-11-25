@@ -53,23 +53,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const elBtnExportM3u = document.getElementById("btn-export-m3u");
   const elSearchInput = document.getElementById("search-input");
   const elPlaylistBody = document.getElementById("playlist-body");
+  const elBtnToggleFolders = document.getElementById("btn-toggle-folders");
   const elDropzone = document.getElementById("app-dropzone");
   const elEqPresetSelect = document.getElementById("eq-preset-select");
   const elEqSliders = document.querySelectorAll(".eq-slider");
   const elPreampSlider = document.getElementById("preamp-slider");
   const elVizModeBtn = document.getElementById("btn-viz-mode");
 
-  // Library folder elements
-  const elLblCurrentFolder = document.getElementById("lbl-current-folder");
-  const elBtnChangeFolder = document.getElementById("btn-change-folder");
-  const elBtnReloadLibrary = document.getElementById("btn-reload-library");
-  const elFolderModal = document.getElementById("folder-modal");
-  const elFolderBtnClose = document.getElementById("folder-btn-close");
-  const elFolderBtnCancel = document.getElementById("folder-btn-cancel");
-  const elFolderBtnSave = document.getElementById("folder-btn-save");
-  const elTxtMusicFolder = document.getElementById("txt-music-folder");
-  const elChkRecursive = document.getElementById("chk-recursive");
-  const elFolderStatusMsg = document.getElementById("folder-status-msg");
+  const elLibraryStatus = document.getElementById("lbl-library-status");
+  const elBtnScanStorage = document.getElementById("btn-scan-storage");
 
   const elPlaylistModal = document.getElementById("playlist-modal");
   const elPlaylistBtnClose = document.getElementById("playlist-btn-close");
@@ -88,7 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let isTimeRemainingMode = false;
   let isSeeking = false;
-  let currentMusicFolder = "";
+  let isLoadingLibrary = false;
   let libraryTracks = [];
   let savedCustomPlaylists = [];
   let draftPlaylist = [];
@@ -110,6 +102,39 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       console.warn("Could not save collapsed folder states:", err);
     }
+  }
+
+  function folderStateKey(folder) {
+    if (folder === null) {
+      return playlist.folderGrouping ? "added-files:" : "custom-playlist:";
+    }
+    return `folder:${folder}`;
+  }
+
+  function getPlaylistFolderStateKeys() {
+    const keys = new Set();
+    playlist.tracks.forEach(track => {
+      const folder = playlist.folderGrouping ? (track.folder || null) : null;
+      keys.add(folderStateKey(folder));
+    });
+    return Array.from(keys);
+  }
+
+  function updateToggleFoldersButton() {
+    if (!elBtnToggleFolders) return;
+    const keys = getPlaylistFolderStateKeys();
+    const allCollapsed = keys.length > 0
+      && keys.every(key => collapsedLibraryFolders.has(key));
+    elBtnToggleFolders.disabled = keys.length === 0;
+    elBtnToggleFolders.textContent = allCollapsed ? "📂 Expandir pastas" : "📁 Recolher pastas";
+    elBtnToggleFolders.title = allCollapsed
+      ? "Expandir todas as pastas"
+      : "Recolher todas as pastas sem limpar a playlist";
+  }
+
+  function getFolderDisplayName(folder) {
+    const segments = folder.split(/[\\/]+/).filter(Boolean);
+    return segments.length ? segments[segments.length - 1] : folder;
   }
 
   // -------------------------------------------------------------
@@ -145,7 +170,8 @@ document.addEventListener("DOMContentLoaded", () => {
   playlist.onTrackChange = (track) => {
     updatePlayerDisplay(track);
     if (track) {
-      audio.loadAndPlay(track);
+      if (isLoadingLibrary) audio.loadTrack(track);
+      else audio.loadAndPlay(track);
     } else {
       audio.stop();
     }
@@ -160,6 +186,11 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       elBtnPlay.classList.remove("active");
     }
+  };
+
+  audio.onError = (error) => {
+    elLcdStatus.textContent = "ERRO DE ÁUDIO";
+    console.error("Não foi possível reproduzir a faixa:", error);
   };
 
   audio.onTimeUpdate = (currentTime, duration) => {
@@ -198,7 +229,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (playlist.currentIndex === -1) {
       playlist.setCurrentIndex(0);
     } else {
-      audio.play();
+      const playRequest = audio.play();
+      if (playRequest && typeof playRequest.catch === "function") {
+        playRequest.catch((error) => {
+          elLcdStatus.textContent = "ERRO DE ÁUDIO";
+          console.error("Não foi possível reproduzir a faixa:", error);
+        });
+      }
     }
   });
 
@@ -266,6 +303,9 @@ document.addEventListener("DOMContentLoaded", () => {
     curVizModeIdx = (curVizModeIdx + 1) % vizModes.length;
     visualizer.setMode(vizModes[curVizModeIdx]);
     elVizModeBtn.textContent = `MODO: ${vizModes[curVizModeIdx].toUpperCase()}`;
+    if (vizModes[curVizModeIdx] === "vu" && window.AndroidBridge) {
+      window.AndroidBridge.requestVisualizerPermission();
+    }
   });
 
   // Equalizer Setup
@@ -317,13 +357,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const trackIndices = new Map(playlist.tracks.map((track, index) => [track, index]));
     const folderGroups = new Map();
     elPlaylistBody.innerHTML = "";
+    updateToggleFoldersButton();
 
     if (tracks.length === 0) {
       elPlaylistBody.innerHTML = `
         <tr>
           <td colspan="6" class="empty-playlist">
             <p>Nenhuma música na lista.</p>
-            <p style="margin-top: 8px;">A pasta selecionada não possui arquivos de áudio compatíveis, ou você pode carregar manualmente:</p>
+            <p style="margin-top: 8px;">Nenhuma música encontrada nos armazenamentos locais. Você também pode carregar arquivos manualmente:</p>
             <button id="btn-load-demo" class="btn-transport active" style="margin-top: 10px; display: inline-block; font-size: 11px;">
               🎵 Testar com Música Demo
             </button>
@@ -343,7 +384,16 @@ document.addEventListener("DOMContentLoaded", () => {
       folderGroups.get(folder).push({ track, index: trackIndices.get(track) });
     });
 
+    const sortedFolderGroups = [];
     folderGroups.forEach((folderTracks, folder) => {
+      sortedFolderGroups.push([folder, folderTracks]);
+    });
+    sortedFolderGroups.sort((left, right) => {
+      const leftFolder = left[0] || "";
+      const rightFolder = right[0] || "";
+      return leftFolder.localeCompare(rightFolder);
+    });
+    sortedFolderGroups.forEach(([folder, folderTracks]) => {
       const folderRow = document.createElement("tr");
       folderRow.className = "folder-header";
       const folderCell = document.createElement("td");
@@ -352,11 +402,9 @@ document.addEventListener("DOMContentLoaded", () => {
         ? (playlist.folderGrouping ? "Arquivos adicionados" : "Playlist personalizada")
         : folder === "."
           ? "Pasta principal"
-          : folder.replace(/[\\/]+/g, " / ");
+          : getFolderDisplayName(folder);
       const trackLabel = folderTracks.length === 1 ? "faixa" : "faixas";
-      const stateKey = folder === null
-        ? (playlist.folderGrouping ? "added-files:" : "custom-playlist:")
-        : `folder:${folder}`;
+      const stateKey = folderStateKey(folder);
       const isCollapsed = collapsedLibraryFolders.has(stateKey);
       const toggleButton = document.createElement("button");
       toggleButton.type = "button";
@@ -368,7 +416,8 @@ document.addEventListener("DOMContentLoaded", () => {
       arrow.textContent = isCollapsed ? "▶" : "▼";
       const label = document.createElement("span");
       label.textContent = `📁 ${folderName} · ${folderTracks.length} ${trackLabel}`;
-      toggleButton.append(arrow, label);
+      toggleButton.appendChild(arrow);
+      toggleButton.appendChild(label);
       folderCell.appendChild(toggleButton);
       folderRow.appendChild(folderCell);
       elPlaylistBody.appendChild(folderRow);
@@ -380,17 +429,42 @@ document.addEventListener("DOMContentLoaded", () => {
         tr.hidden = isCollapsed;
         if (index === playlist.currentIndex) tr.classList.add("playing");
 
-        tr.innerHTML = `
-          <td class="col-num">${track.track || (index + 1)}</td>
-          <td class="col-title" title="${track.title}">${track.title}</td>
-          <td class="col-artist" title="${track.artist}">${track.artist}</td>
-          <td class="col-album" title="${track.album}">${track.album}</td>
-          <td class="col-dur">${track.duration ? formatTime(track.duration) : '--:--'}</td>
-          <td class="col-actions">
-            <button class="btn-mini btn-row-tag" title="Editar Metadados ID3">🏷️</button>
-            <button class="btn-mini btn-row-del" title="Remover da Lista">✖</button>
-          </td>
-        `;
+        const trackNumber = document.createElement("td");
+        trackNumber.className = "col-num";
+        trackNumber.textContent = track.track || String(index + 1);
+        const titleCell = document.createElement("td");
+        titleCell.className = "col-title";
+        titleCell.title = track.title;
+        titleCell.textContent = track.title;
+        const artistCell = document.createElement("td");
+        artistCell.className = "col-artist";
+        artistCell.title = track.artist;
+        artistCell.textContent = track.artist;
+        const albumCell = document.createElement("td");
+        albumCell.className = "col-album";
+        albumCell.title = track.album;
+        albumCell.textContent = track.album;
+        const durationCell = document.createElement("td");
+        durationCell.className = "col-dur";
+        durationCell.textContent = track.duration ? formatTime(track.duration) : "--:--";
+        const actionsCell = document.createElement("td");
+        actionsCell.className = "col-actions";
+        const tagButton = document.createElement("button");
+        tagButton.className = "btn-mini btn-row-tag";
+        tagButton.title = "Editar Metadados ID3";
+        tagButton.textContent = "🏷️";
+        const deleteButton = document.createElement("button");
+        deleteButton.className = "btn-mini btn-row-del";
+        deleteButton.title = "Remover da Lista";
+        deleteButton.textContent = "✖";
+        actionsCell.appendChild(tagButton);
+        actionsCell.appendChild(deleteButton);
+        tr.appendChild(trackNumber);
+        tr.appendChild(titleCell);
+        tr.appendChild(artistCell);
+        tr.appendChild(albumCell);
+        tr.appendChild(durationCell);
+        tr.appendChild(actionsCell);
 
         tr.addEventListener("dblclick", () => {
           playlist.setCurrentIndex(index);
@@ -427,6 +501,7 @@ document.addEventListener("DOMContentLoaded", () => {
           row.hidden = shouldCollapse;
         });
         saveCollapsedFolderStates();
+        updateToggleFoldersButton();
       });
     });
   }
@@ -434,6 +509,19 @@ document.addEventListener("DOMContentLoaded", () => {
   playlist.onPlaylistUpdated = () => {
     renderPlaylistTable();
   };
+
+  if (elBtnToggleFolders) {
+    elBtnToggleFolders.addEventListener("click", () => {
+      const keys = getPlaylistFolderStateKeys();
+      const shouldCollapse = keys.some(key => !collapsedLibraryFolders.has(key));
+      keys.forEach(key => {
+        if (shouldCollapse) collapsedLibraryFolders.add(key);
+        else collapsedLibraryFolders.delete(key);
+      });
+      saveCollapsedFolderStates();
+      renderPlaylistTable();
+    });
+  }
 
   // Add Files & Folders manually
   elBtnAddFiles.addEventListener("click", () => elFileInput.click());
@@ -476,118 +564,50 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // -------------------------------------------------------------
-  // Library Folder Management (Persistence & Scanning)
+  // Automatic local storage music scan
   // -------------------------------------------------------------
-  async function loadLibraryFromFolder(folderPath = "", recursive = true) {
-    elLblCurrentFolder.textContent = "Escaneando músicas...";
+  async function scanLocalStorage() {
+    elLibraryStatus.textContent = "Buscando músicas nos armazenamentos locais...";
+    elBtnScanStorage.disabled = true;
     try {
-      const url = `/api/library?folder=${encodeURIComponent(folderPath)}&recursive=${recursive ? '1' : '0'}`;
-      const resp = await fetch(url);
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.success) {
-          currentMusicFolder = data.folder;
-          elLblCurrentFolder.textContent = data.folder;
-          libraryTracks = playlist.loadLibraryTracks(data);
-          return true;
+      let data;
+      if (window.AndroidBridge) {
+        data = JSON.parse(window.AndroidBridge.scanMusic());
+      } else {
+        const response = await fetch("/api/library");
+        if (!response.ok) {
+          throw new Error(`Falha na busca (${response.status}).`);
         }
+        data = await response.json();
       }
-      elLblCurrentFolder.textContent = folderPath || "Nenhuma pasta configurada";
-    } catch (err) {
-      console.warn("Could not load library from server:", err);
-      elLblCurrentFolder.textContent = folderPath || "Servidor offline";
-    }
-    return false;
-  }
-
-  // Load config and scan library on startup
-  async function initLibrary() {
-    try {
-      const resp = await fetch("/api/get_config");
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.success && data.config) {
-          currentMusicFolder = data.config.music_folder;
-          const recursive = data.config.recursive !== false;
-          elTxtMusicFolder.value = currentMusicFolder;
-          elChkRecursive.checked = recursive;
-          await loadLibraryFromFolder(currentMusicFolder, recursive);
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to get config:", e);
-    }
-    // Fallback
-    await loadLibraryFromFolder();
-  }
-
-  // Folder Modal handlers
-  function openFolderModal() {
-    elTxtMusicFolder.value = currentMusicFolder || "/home/gleydmar/Downloads";
-    elFolderStatusMsg.textContent = "";
-    elFolderStatusMsg.className = "tag-status";
-    elFolderModal.classList.remove("hidden");
-  }
-
-  function closeFolderModal() {
-    elFolderModal.classList.add("hidden");
-  }
-
-  if (elBtnChangeFolder) elBtnChangeFolder.addEventListener("click", openFolderModal);
-  if (elLblCurrentFolder) elLblCurrentFolder.addEventListener("click", openFolderModal);
-  if (elFolderBtnClose) elFolderBtnClose.addEventListener("click", closeFolderModal);
-  if (elFolderBtnCancel) elFolderBtnCancel.addEventListener("click", closeFolderModal);
-
-  if (elFolderModal) {
-    elFolderModal.addEventListener("click", (e) => {
-      if (e.target === elFolderModal) closeFolderModal();
-    });
-  }
-
-  if (elBtnReloadLibrary) {
-    elBtnReloadLibrary.addEventListener("click", () => {
-      loadLibraryFromFolder(currentMusicFolder, elChkRecursive.checked);
-    });
-  }
-
-  if (elFolderBtnSave) {
-    elFolderBtnSave.addEventListener("click", async () => {
-      const newFolder = elTxtMusicFolder.value.trim();
-      const recursive = elChkRecursive.checked;
-      if (!newFolder) {
-        elFolderStatusMsg.textContent = "Por favor, digite um caminho válido.";
-        elFolderStatusMsg.className = "tag-status error";
-        return;
+      if (!data.success) {
+        throw new Error(data.error || "Não foi possível buscar músicas.");
       }
 
-      elFolderStatusMsg.textContent = "Salvando pasta e escaneando...";
-      elFolderStatusMsg.className = "tag-status info";
-
+      isLoadingLibrary = true;
       try {
-        const resp = await fetch("/api/set_music_folder", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder: newFolder, recursive: recursive })
-        });
-
-        const data = await resp.json();
-        if (data.success) {
-          currentMusicFolder = data.folder;
-          await loadLibraryFromFolder(data.folder, recursive);
-          elFolderStatusMsg.textContent = "✅ Biblioteca atualizada!";
-          elFolderStatusMsg.className = "tag-status success";
-          setTimeout(closeFolderModal, 800);
-        } else {
-          elFolderStatusMsg.textContent = "Erro: " + (data.error || "Pasta não encontrada.");
-          elFolderStatusMsg.className = "tag-status error";
-        }
-      } catch (err) {
-        elFolderStatusMsg.textContent = "Erro ao comunicar com o servidor: " + err.message;
-        elFolderStatusMsg.className = "tag-status error";
+        libraryTracks = playlist.loadLibraryTracks(data);
+      } finally {
+        isLoadingLibrary = false;
       }
-    });
+      const storageLabel = data.storageCount === 1 ? "armazenamento" : "armazenamentos";
+      const trackLabel = data.count === 1 ? "música encontrada" : "músicas encontradas";
+      const scanWarning = data.scanErrorCount
+        ? ` · ${data.scanErrorCount} pasta(s) sem acesso`
+        : "";
+      elLibraryStatus.textContent =
+        `${data.count} ${trackLabel} em ${data.storageCount} ${storageLabel}${scanWarning}`;
+    } catch (error) {
+      console.error("Não foi possível buscar músicas nos armazenamentos locais:", error);
+      elLibraryStatus.textContent = `Erro na busca: ${error.message}`;
+    } finally {
+      elBtnScanStorage.disabled = false;
+    }
   }
+
+  elBtnScanStorage.addEventListener("click", scanLocalStorage);
+  window.addEventListener("musicmatch:scan-library", scanLocalStorage);
+  scanLocalStorage();
 
   function setCustomPlaylistStatus(message, state = "") {
     elPlaylistStatusMsg.textContent = message;
@@ -641,9 +661,12 @@ document.addEventListener("DOMContentLoaded", () => {
       detail.className = "playlist-picker-detail";
       const folder = track.folder === "."
         ? "Pasta principal"
-        : (track.folder || "Arquivos adicionados").replace(/[\\/]+/g, " / ");
+        : track.folder
+          ? getFolderDisplayName(track.folder)
+          : "Arquivos adicionados";
       detail.textContent = `${track.artist || "Desconhecido"} · ${folder}`;
-      info.append(title, detail);
+      info.appendChild(title);
+      info.appendChild(detail);
 
       const addButton = document.createElement("button");
       addButton.type = "button";
@@ -655,7 +678,8 @@ document.addEventListener("DOMContentLoaded", () => {
         renderCustomPlaylistBuilder();
       });
 
-      row.append(info, addButton);
+      row.appendChild(info);
+      row.appendChild(addButton);
       elPlaylistLibraryList.appendChild(row);
     });
 
@@ -679,7 +703,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const detail = document.createElement("div");
       detail.className = "playlist-picker-detail";
       detail.textContent = track.artist || "Desconhecido";
-      info.append(title, detail);
+      info.appendChild(title);
+      info.appendChild(detail);
 
       const moveUpButton = document.createElement("button");
       moveUpButton.type = "button";
@@ -713,12 +738,24 @@ document.addEventListener("DOMContentLoaded", () => {
         renderCustomPlaylistBuilder();
       });
 
-      row.append(info, moveUpButton, moveDownButton, removeButton);
+      row.appendChild(info);
+      row.appendChild(moveUpButton);
+      row.appendChild(moveDownButton);
+      row.appendChild(removeButton);
       elPlaylistDraftList.appendChild(row);
     });
   }
 
   async function fetchSavedCustomPlaylists() {
+    if (window.AndroidBridge) {
+      const data = JSON.parse(window.AndroidBridge.getPlaylists());
+      if (!data.success || !Array.isArray(data.playlists)) {
+        throw new Error(data.error || "Não foi possível carregar as playlists salvas.");
+      }
+      savedCustomPlaylists = data.playlists;
+      return;
+    }
+
     const response = await fetch("/api/get_playlists");
     const data = await response.json();
     if (!response.ok || !data.success || !Array.isArray(data.playlists)) {
@@ -728,6 +765,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function saveCustomPlaylists(playlists) {
+    if (window.AndroidBridge) {
+      const data = JSON.parse(window.AndroidBridge.savePlaylists(JSON.stringify(playlists)));
+      if (!data.success) {
+        throw new Error(data.error || "Não foi possível salvar as playlists.");
+      }
+      savedCustomPlaylists = data.playlists;
+      return;
+    }
+
     const response = await fetch("/api/save_playlists", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -790,7 +836,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderCustomPlaylistBuilder();
     const missing = selected.trackPaths.length - draftPlaylist.length;
     setCustomPlaylistStatus(
-      missing ? `${missing} faixa(s) não estão na pasta de músicas atual.` : "Playlist carregada.",
+      missing ? `${missing} faixa(s) não estão na biblioteca atual.` : "Playlist carregada.",
       missing ? "info" : "success"
     );
   });
@@ -947,6 +993,4 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Initialize Library from Server
-  initLibrary();
 });

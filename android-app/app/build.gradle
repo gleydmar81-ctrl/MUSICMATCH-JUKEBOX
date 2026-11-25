@@ -6,15 +6,51 @@ android {
     namespace "com.musicmatch.jukebox"
     compileSdk 35
 
+    sourceSets {
+        main.assets.srcDir(layout.buildDirectory.dir("generated/jukeboxAssets"))
+    }
+
     defaultConfig {
         applicationId "com.musicmatch.jukebox"
         minSdk 21
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "2.0"
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"
+}
+
+def webRoot = rootProject.projectDir.parentFile
+def generatedJukeboxAssets = layout.buildDirectory.dir("generated/jukeboxAssets")
+def legacyJukeboxJs = layout.buildDirectory.dir("generated/jukeboxLegacyJs")
+
+tasks.register("transpileJukeboxWebJavaScript", Exec) {
+    workingDir webRoot
+    inputs.dir(file("$webRoot/js"))
+    inputs.file(file("$webRoot/babel.config.json"))
+    inputs.file(file("$webRoot/package-lock.json"))
+    outputs.dir(legacyJukeboxJs)
+    commandLine "npm", "run", "build:android-js", "--", "--out-dir",
+            legacyJukeboxJs.get().asFile.absolutePath
+}
+
+tasks.register("copyJukeboxWebAssets", Copy) {
+    from(webRoot) {
+        include "index.html"
+        include "css/**"
+        include "assets/**"
+        include "demo_tune.wav"
+    }
+    from(legacyJukeboxJs) {
+        into "js"
+    }
+    into(generatedJukeboxAssets)
+    dependsOn("transpileJukeboxWebJavaScript")
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("copyJukeboxWebAssets")
 }

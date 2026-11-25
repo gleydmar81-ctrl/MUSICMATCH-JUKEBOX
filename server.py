@@ -3,7 +3,7 @@
 MusicMatch Jukebox Web - Local HTTP Server
 Features:
 - Range Requests (HTTP 206) for smooth audio seeking on PC & Tablets
-- Music Library Scanner (remembers folder path, scans ID3 tags)
+- Music Library Scanner (automatically scans local storage for audio)
 - Direct In-Place File Overwrite API (zero duplicates)
 - Audio Streaming & Cover Art Extraction API
 """
@@ -13,6 +13,7 @@ import sys
 import json
 import struct
 import urllib.parse
+import subprocess
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,14 +36,13 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+                config.pop("music_folder", None)
+                config.pop("recursive", None)
+                return config
         except Exception:
             pass
-    # Default folder
-    default_dir = os.path.expanduser("~/Downloads")
-    if not os.path.exists(default_dir):
-        default_dir = os.path.expanduser("~")
-    return {"music_folder": default_dir, "recursive": True}
+    return {"playlists": []}
 
 def save_config(cfg):
     try:
@@ -63,6 +63,137 @@ def filesystem_path(path):
     if absolute_path.startswith("\\\\"):
         return "\\\\?\\UNC\\" + absolute_path[2:]
     return "\\\\?\\" + absolute_path
+
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
+LOCAL_FILESYSTEM_TYPES = {
+    "apfs", "btrfs", "exfat", "ext2", "ext3", "ext4", "f2fs", "fat", "hfs",
+    "hfsplus", "iso9660", "ntfs", "ntfs3", "udf", "vfat", "xfs", "zfs", "fuseblk"
+}
+SKIPPED_DIRECTORY_NAMES = {
+    "$Recycle.Bin", "AppData", "node_modules", "Program Files", "Program Files (x86)",
+    "ProgramData", "Recovery", "System Volume Information", "Windows", ".cache", ".git",
+    ".gradle", ".local", ".npm", ".Trash-1000", "lost+found"
+}
+SKIPPED_SYSTEM_MOUNTS = ("/boot", "/dev", "/proc", "/run", "/sys", "/tmp", "/usr", "/var")
+
+def _decode_mount_path(path):
+    return path.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
+
+def get_local_music_roots():
+    home = os.path.abspath(os.path.expanduser("~"))
+    roots = [home]
+
+    if os.name == "nt":
+        import ctypes
+
+        drive_mask = ctypes.windll.kernel32.GetLogicalDrives()
+        drive_roots = []
+        for index in range(26):
+            if not drive_mask & (1 << index):
+                continue
+            drive = f"{chr(ord('A') + index)}:\\"
+            drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive)
+            if drive_type in (2, 3) and os.path.isdir(drive):
+                drive_roots.append(drive)
+        home_drive = os.path.splitdrive(home)[0].lower()
+        if not any(os.path.splitdrive(drive)[0].lower() == home_drive for drive in drive_roots):
+            drive_roots.append(home)
+        roots = drive_roots
+    elif sys.platform == "darwin":
+        mount_output = subprocess.run(
+            ["mount"], check=True, capture_output=True, text=True
+        ).stdout
+        for line in mount_output.splitlines():
+            if " on /Volumes/" not in line:
+                continue
+            mount_path = line.split(" on ", 1)[1].split(" (", 1)[0]
+            filesystem_type = line.rsplit("(", 1)[-1].split(",", 1)[0]
+            if filesystem_type in LOCAL_FILESYSTEM_TYPES and os.path.isdir(mount_path):
+                roots.append(mount_path)
+    else:
+        try:
+            with open("/proc/mounts", "r", encoding="utf-8") as mounts_file:
+                mounts = mounts_file.readlines()
+        except OSError:
+            mounts = []
+
+        home_prefix = home.rstrip(os.sep) + os.sep
+        for line in mounts:
+            fields = line.split()
+            if len(fields) < 3 or fields[2] not in LOCAL_FILESYSTEM_TYPES:
+                continue
+            mount_path = os.path.abspath(_decode_mount_path(fields[1]))
+            if mount_path == "/" or mount_path == home or home.startswith(mount_path.rstrip(os.sep) + os.sep):
+                continue
+            is_run_media = mount_path.startswith("/run/media/")
+            if not is_run_media and any(
+                mount_path == path or mount_path.startswith(path + os.sep)
+                for path in SKIPPED_SYSTEM_MOUNTS
+            ):
+                continue
+            if os.path.isdir(mount_path):
+                roots.append(mount_path)
+
+    unique_roots = []
+    seen = set()
+    for root in roots:
+        normalized = os.path.normcase(os.path.realpath(root))
+        if normalized not in seen:
+            seen.add(normalized)
+            unique_roots.append(root)
+    return unique_roots
+
+def scan_music_roots(roots):
+    tracks = []
+    scan_errors = []
+
+    def record_error(error):
+        scan_errors.append({"path": error.filename or "", "message": str(error)})
+
+    def process_file(full_path):
+        _, extension = os.path.splitext(full_path)
+        if extension.lower() not in SUPPORTED_AUDIO_EXTENSIONS or os.path.islink(full_path):
+            return
+        try:
+            size = os.path.getsize(filesystem_path(full_path))
+            tags = fast_parse_id3(full_path)
+            stream_path = urllib.parse.quote(full_path)
+            tracks.append({
+                "id": f"lib_{len(tracks)}",
+                "filename": os.path.basename(full_path),
+                "fullPath": full_path,
+                "folder": os.path.dirname(full_path),
+                "size": size,
+                "streamUrl": f"/api/stream?path={stream_path}",
+                "coverUrl": f"/api/cover?path={stream_path}" if tags["hasCover"] else None,
+                "title": tags["title"],
+                "artist": tags["artist"],
+                "album": tags["album"],
+                "year": tags["year"],
+                "genre": tags["genre"],
+                "track": tags["track"]
+            })
+        except OSError as error:
+            record_error(error)
+
+    for root in roots:
+        if not os.path.isdir(filesystem_path(root)):
+            scan_errors.append({"path": root, "message": "Armazenamento indisponível"})
+            continue
+        for current_root, dirs, files in os.walk(root, onerror=record_error):
+            dirs[:] = [
+                directory for directory in sorted(dirs)
+                if directory not in SKIPPED_DIRECTORY_NAMES
+                and not os.path.islink(os.path.join(current_root, directory))
+                and not getattr(os.path, "isjunction", lambda path: False)(
+                    os.path.join(current_root, directory)
+                )
+                and not os.path.ismount(os.path.join(current_root, directory))
+            ]
+            for filename in sorted(files):
+                process_file(os.path.join(current_root, filename))
+
+    return tracks, scan_errors
 
 # Fast pure-Python ID3 parser for lightning-fast library scanning
 ID3_GENRES = [
@@ -237,29 +368,6 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
-        # API: Set and remember music folder
-        if parsed_url.path == "/api/set_music_folder":
-            try:
-                content_len = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_len).decode("utf-8")
-                data = json.loads(body)
-                folder = os.path.abspath(os.path.expanduser(data.get("folder", "").strip()))
-
-                if not os.path.isdir(folder):
-                    self._send_json({"success": False, "error": f"Pasta não encontrada: {folder}"}, HTTPStatus.BAD_REQUEST)
-                    return
-
-                cfg = load_config()
-                cfg["music_folder"] = folder
-                if "recursive" in data:
-                    cfg["recursive"] = bool(data["recursive"])
-                save_config(cfg)
-
-                self._send_json({"success": True, "folder": folder, "recursive": cfg.get("recursive", True)})
-            except Exception as e:
-                self._send_json({"success": False, "error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-
         # API: Direct file saving (overwrites file on disk without creating duplicates)
         if parsed_url.path == "/api/save_direct":
             try:
@@ -282,12 +390,10 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
                 if filepath and os.path.isfile(filesystem_path(filepath)):
                     target_path = filepath
                 
-                # 2. Otherwise search in configured music folder and common directories
+                # 2. Otherwise search common local music directories
                 if not target_path and filename:
-                    cfg = load_config()
                     clean_name = os.path.basename(filename)
                     search_roots = [
-                        cfg.get("music_folder", ""),
                         os.path.expanduser("~/Downloads"),
                         os.path.expanduser("~/Música"),
                         os.path.expanduser("~/Music"),
@@ -304,7 +410,11 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
                             break
 
                     if not target_path:
-                        for s_dir in [cfg.get("music_folder", ""), os.path.expanduser("~/Downloads"), os.path.expanduser("~/Música")]:
+                        for s_dir in [
+                            os.path.expanduser("~/Downloads"),
+                            os.path.expanduser("~/Música"),
+                            os.path.expanduser("~/Music")
+                        ]:
                             if not s_dir or not os.path.exists(filesystem_path(s_dir)):
                                 continue
                             for r, _, files in os.walk(s_dir):
@@ -316,10 +426,9 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
                             if target_path:
                                 break
 
-                # 3. Fallback to configured folder or Downloads
+                # 3. Fallback to Downloads
                 if not target_path:
-                    cfg = load_config()
-                    base = cfg.get("music_folder") or os.path.expanduser("~/Downloads")
+                    base = os.path.expanduser("~/Downloads")
                     clean_name = os.path.basename(filename) if filename else "musica.mp3"
                     target_path = os.path.join(base, clean_name)
 
@@ -358,63 +467,18 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"success": True, "playlists": playlists})
             return
 
-        # API: Scan Library in configured or specified folder
+        # API: Scan local storage devices for music
         if parsed_url.path == "/api/library":
-            query = urllib.parse.parse_qs(parsed_url.query)
-            cfg = load_config()
-            target_dir = query.get("folder", [cfg.get("music_folder", os.path.expanduser("~/Downloads"))])[0]
-            target_dir = os.path.abspath(os.path.expanduser(target_dir))
-            recursive = query.get("recursive", ["1"])[0] == "1"
-
-            if not os.path.isdir(filesystem_path(target_dir)):
-                self._send_json({"success": False, "error": f"Pasta não encontrada: {target_dir}"}, HTTPStatus.NOT_FOUND)
-                return
-
             try:
-                audio_exts = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
-                tracks = []
-                idx = 0
-
-                def process_file(full_p, fname):
-                    nonlocal idx
-                    _, ext = os.path.splitext(fname)
-                    if ext.lower() in audio_exts:
-                        fsize = os.path.getsize(filesystem_path(full_p))
-                        tags = fast_parse_id3(full_p)
-                        stream_path = urllib.parse.quote(full_p)
-                        tracks.append({
-                            "id": f"lib_{idx}",
-                            "filename": fname,
-                            "fullPath": full_p,
-                            "folder": os.path.relpath(os.path.dirname(full_p), target_dir),
-                            "size": fsize,
-                            "streamUrl": f"/api/stream?path={stream_path}",
-                            "coverUrl": f"/api/cover?path={stream_path}" if tags["hasCover"] else None,
-                            "title": tags["title"],
-                            "artist": tags["artist"],
-                            "album": tags["album"],
-                            "year": tags["year"],
-                            "genre": tags["genre"],
-                            "track": tags["track"]
-                        })
-                        idx += 1
-
-                if recursive:
-                    for root, dirs, files in os.walk(target_dir):
-                        dirs.sort()
-                        for f in sorted(files):
-                            process_file(os.path.join(root, f), f)
-                else:
-                    for f in sorted(os.listdir(target_dir)):
-                        full_p = os.path.join(target_dir, f)
-                        if os.path.isfile(filesystem_path(full_p)):
-                            process_file(full_p, f)
-
+                roots = get_local_music_roots()
+                tracks, scan_errors = scan_music_roots(roots)
                 self._send_json({
                     "success": True,
-                    "folder": target_dir,
+                    "storageCount": len(roots),
                     "count": len(tracks),
-                    "tracks": tracks
+                    "tracks": tracks,
+                    "scanErrorCount": len(scan_errors),
+                    "scanErrors": scan_errors[:10]
                 })
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -547,14 +611,13 @@ class MusicMatchHTTPRequestHandler(SimpleHTTPRequestHandler):
 def run():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else PORT
     server_address = ('', port)
-    cfg = load_config()
     
     with ThreadingHTTPServer(server_address, MusicMatchHTTPRequestHandler) as httpd:
         print("=" * 60)
         print(" 🎵 MUSICMATCH JUKEBOX WEB SERVER ATIVO!")
         print("=" * 60)
         print(f" Pasta Raiz App   : {DIRECTORY}")
-        print(f" Pasta de Músicas : {cfg.get('music_folder')}")
+        print(" Armazenamentos   : discos locais e removíveis")
         print(f" Acesse Local     : http://localhost:{port}")
         print(f" Acesse no Tablet : http://<IP-DO-PC>:{port}")
         print(" Recursos         : Auto-Scan da Biblioteca + Range Requests + In-Place Save")

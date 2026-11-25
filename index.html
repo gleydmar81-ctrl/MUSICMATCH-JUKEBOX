@@ -71,15 +71,34 @@
       <!-- Transport Controls Deck -->
       <section class="transport-deck">
         <div class="transport-buttons">
-          <button id="btn-prev" class="btn-transport" title="Faixa Anterior (Shift + Esquerda)">⏮</button>
-          <button id="btn-play" class="btn-transport btn-primary" title="Tocar (Espaço)">▶</button>
-          <button id="btn-pause" class="btn-transport" title="Pausar (Espaço)">⏸</button>
-          <button id="btn-stop" class="btn-transport" title="Parar">⏹</button>
-          <button id="btn-next" class="btn-transport" title="Próxima Faixa (Shift + Direita)">⏭</button>
-          <button id="btn-shuffle" class="btn-transport" title="Modo Aleatório (Shuffle)">🔀</button>
-          <button id="btn-repeat" class="btn-transport" title="Repetir Playlist">🔁</button>
-          <button id="btn-tag" class="btn-transport" title="Editar Metadados ID3 da faixa atual">🏷️ TAG</button>
-          <button id="btn-eq-toggle" class="btn-transport active" title="Ativar/Desativar Equalizador">EQ</button>
+          <button id="btn-prev" class="btn-transport" title="Faixa Anterior (Shift + Esquerda)" aria-label="Faixa anterior">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14M19 5 9 12l10 7z" /></svg>
+          </button>
+          <button id="btn-play" class="btn-transport btn-primary" title="Tocar (Espaço)" aria-label="Tocar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+          </button>
+          <button id="btn-pause" class="btn-transport" title="Pausar (Espaço)" aria-label="Pausar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM15 5h4v14h-4z" /></svg>
+          </button>
+          <button id="btn-stop" class="btn-transport" title="Parar" aria-label="Parar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z" /></svg>
+          </button>
+          <button id="btn-next" class="btn-transport" title="Próxima Faixa (Shift + Direita)" aria-label="Próxima faixa">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14M5 5l10 7-10 7z" /></svg>
+          </button>
+          <button id="btn-shuffle" class="btn-transport" title="Modo Aleatório (Shuffle)" aria-label="Modo aleatório">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M4 4l5 5M14 14l7 7" /></svg>
+          </button>
+          <button id="btn-repeat" class="btn-transport" title="Repetir Playlist" aria-label="Repetir playlist">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m17 2 4 4-4 4M3 11V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4M21 13v3a2 2 0 0 1-2 2H3" /></svg>
+          </button>
+          <button id="btn-tag" class="btn-transport" title="Editar Metadados ID3 da faixa atual" aria-label="Editar tags">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9zM8 8h.01" /></svg>
+            <span>TAG</span>
+          </button>
+          <button id="btn-eq-toggle" class="btn-transport active" title="Ativar/Desativar Equalizador" aria-label="Equalizador">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16M2 9h6M9 14h6M16 7h6" /></svg>
+          </button>
         </div>
 
         <div class="audio-adjusters">
@@ -160,16 +179,15 @@
         </div>
       </section>
 
-      <!-- Persistent Music Library Folder Bar -->
+      <!-- Automatic local storage scan -->
       <section class="library-folder-bar" id="library-section">
         <div class="folder-info">
-          <span class="folder-icon">📁</span>
-          <span class="folder-label">Pasta da Biblioteca:</span>
-          <span id="lbl-current-folder" class="folder-path" title="Clique para alterar a pasta padrão">Carregando pasta...</span>
+          <span class="folder-icon">💽</span>
+          <span class="folder-label">Biblioteca local:</span>
+          <span id="lbl-library-status" class="folder-path" aria-live="polite">Preparando busca automática...</span>
         </div>
         <div class="folder-actions">
-          <button id="btn-change-folder" class="btn-tool" title="Alterar pasta padrão de músicas (local ou rede Windows)">⚙️ Alterar Pasta</button>
-          <button id="btn-reload-library" class="btn-tool" title="Recarregar e escanear músicas desta pasta">🔄 Recarregar</button>
+          <button id="btn-scan-storage" class="btn-tool" title="Buscar músicas em todos os armazenamentos locais">🔍 Buscar músicas</button>
         </div>
       </section>
 
@@ -183,6 +201,7 @@
             <button id="btn-open-playlists" class="btn-tool" title="Montar uma playlist personalizada">🎼 Playlists</button>
             <button id="btn-export-m3u" class="btn-tool" title="Salvar lista em formato M3U">💾 Exportar M3U</button>
             <button id="btn-clear-playlist" class="btn-tool" title="Limpar lista">🗑️ Limpar</button>
+            <button id="btn-toggle-folders" class="btn-tool" title="Recolher ou expandir todas as pastas">📁 Recolher pastas</button>
           </div>
 
           <div class="search-box">
@@ -311,49 +330,6 @@
     </div>
   </div>
 
-  <!-- Music Folder Configuration Modal -->
-  <div id="folder-modal" class="modal-overlay hidden">
-    <div class="tag-dialog" style="max-width: 520px;">
-      <header class="modal-header">
-        <h2>📁 Configurar Pasta Padrão da Biblioteca</h2>
-        <button id="folder-btn-close" class="win-btn" title="Fechar">✕</button>
-      </header>
-
-      <div class="modal-body">
-        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-          O aplicativo vai lembrar desta pasta e carregar suas músicas automaticamente toda vez que abrir no PC ou no Tablet!
-        </p>
-
-        <div class="form-group full-width">
-          <label for="txt-music-folder">Caminho da Pasta no Computador ou Rede:</label>
-          <input type="text" id="txt-music-folder" placeholder="/home/gleydmar/Downloads ou /mnt/windows_musicas">
-        </div>
-
-        <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
-          <input type="checkbox" id="chk-recursive" checked style="cursor: pointer;">
-          <label for="chk-recursive" style="font-size: 12px; color: #fff; cursor: pointer;">Buscar músicas dentro de subpastas também (recursivo)</label>
-        </div>
-
-        <div style="margin-top: 14px; background: rgba(0, 229, 255, 0.08); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 4px; padding: 10px; font-size: 11px; color: #cde;">
-          💡 <strong>Para usar músicas de um PC com Windows na rede:</strong><br>
-          Compartilhe a pasta no Windows. No seu Linux, monte a pasta da rede com o comando:<br>
-          <code style="display:block; margin:5px 0; color:#55ff99; background:#0b1510; padding:4px 8px; border-radius:3px; word-break:break-all;">
-            sudo mount -t cifs //IP_DO_WINDOWS/Musicas /mnt/windows_musicas -o username=SEU_USER
-          </code>
-          E depois digite <strong style="color:#55ff99;">/mnt/windows_musicas</strong> no campo acima!
-        </div>
-      </div>
-
-      <footer class="modal-footer">
-        <span id="folder-status-msg" class="tag-status"></span>
-        <div class="tag-actions">
-          <button id="folder-btn-cancel" class="btn-transport" style="font-size: 11px;">Cancelar</button>
-          <button id="folder-btn-save" class="btn-transport active" style="font-size: 11px;">💾 Salvar e Carregar Biblioteca</button>
-        </div>
-      </footer>
-    </div>
-  </div>
-
   <!-- Custom Playlist Builder Modal -->
   <div id="playlist-modal" class="modal-overlay hidden">
     <div class="playlist-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-modal-title">
@@ -402,6 +378,7 @@
   </div>
 
   <!-- Scripts -->
+  <script src="js/polyfills.js"></script>
   <script src="js/id3.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/visualizer.js"></script>

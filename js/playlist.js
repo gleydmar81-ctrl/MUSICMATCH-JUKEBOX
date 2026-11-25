@@ -24,9 +24,10 @@ class PlaylistManager {
     this.folderGrouping = true;
     const newTracks = libraryData.tracks.map(t => ({
       id: t.id || "track_" + Math.random().toString(36).substr(2, 9),
-      file: null, // Streamed from server
+      file: null,
       filename: t.filename,
       fullPath: t.fullPath,
+      contentUri: t.contentUri || null,
       folder: t.folder || null,
       url: t.streamUrl,
       streamUrl: t.streamUrl,

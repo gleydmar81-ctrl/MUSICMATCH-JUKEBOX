@@ -191,18 +191,7 @@ class Visualizer {
   }
 
   _drawVU(w, h) {
-    this.audioEngine.getFrequencyData(this.dataArray);
-
-    // Compute left / right average energy
-    let sumLeft = 0;
-    let sumRight = 0;
-    const half = Math.floor(this.dataArray.length / 2);
-    for (let i = 0; i < half; i++) {
-      sumLeft += this.dataArray[i];
-      sumRight += this.dataArray[i + half];
-    }
-    const valL = (sumLeft / (half * 255));
-    const valR = (sumRight / (half * 255));
+    const levels = this.audioEngine.getVULevels(this.dataArray);
 
     const drawMeter = (val, y, label) => {
       this.ctx.fillStyle = "#77aa88";
@@ -228,8 +217,8 @@ class Visualizer {
       this.ctx.fillRect(meterX, y, fillW, meterH);
     };
 
-    drawMeter(valL, h * 0.25, "L");
-    drawMeter(valR, h * 0.6, "R");
+    drawMeter(levels.left, h * 0.25, "L");
+    drawMeter(levels.right, h * 0.6, "R");
   }
 }
 

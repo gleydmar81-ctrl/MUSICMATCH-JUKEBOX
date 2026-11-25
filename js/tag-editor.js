@@ -223,9 +223,26 @@ class TagEditor {
   }
 
   async saveDirectlyToFile() {
-    this._showStatus("Gravando diretamente no arquivo original no seu computador...", "info");
+    this._showStatus("Gravando diretamente no arquivo original...", "info");
     try {
       const newBlob = await this._generateUpdatedBlob();
+
+      if (window.AndroidBridge && this.currentTrack.contentUri) {
+        const bytes = new Uint8Array(await newBlob.arrayBuffer());
+        const chunks = [];
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+        }
+        const result = JSON.parse(window.AndroidBridge.saveTrack(
+          this.currentTrack.contentUri,
+          window.btoa(chunks.join(""))
+        ));
+        if (!result.success) {
+          throw new Error(result.error || "Não foi possível salvar o arquivo no tablet.");
+        }
+        this._showStatus("✅ Arquivo original atualizado no tablet!", "success");
+        return;
+      }
 
       // Step 1: Use Python server API to overwrite in-place on disk
       try {
