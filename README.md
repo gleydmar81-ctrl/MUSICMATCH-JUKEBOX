@@ -71,3 +71,4 @@ Se você quiser levar o projeto para rodar no Windows:
 5. Para iniciar automaticamente ao ligar o Windows:
    - Pressione `Win + R`, digite `shell:startup` e crie um atalho para o `iniciar.bat` lá dentro.
 
+# MUSICMATCH-JUKEBOX
